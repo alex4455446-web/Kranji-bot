@@ -7,7 +7,9 @@ import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
 import { getGuildMusicData, clearUpdateInterval } from './playerStore.js';
 import { canControlMusic, requireVoiceChannel, VOICE_CHANNEL_DENIAL } from './permissions.js';
 import {
+    buildAddedTrackEmbed,
     buildNowPlayingEmbed,
+    buildPlaylistAddedEmbed,
     buildQueueEmbed,
     buildQueuePaginationRow,
     getQueuePageSize,
@@ -233,10 +235,11 @@ export async function playQuery(client, interaction, query) {
         }
 
         return {
-            embed: successEmbed(
-                'Playlist Added',
-                `**${playlistInfo?.name || 'Playlist'}**\nAdded ${added} of ${tracks.length} track(s).${skipped ? ` Skipped ${skipped} duplicate(s).` : ''}`,
-            ),
+            embed: buildPlaylistAddedEmbed(playlistInfo, {
+                added,
+                total: tracks.length,
+                skipped,
+            }),
         };
     }
 
@@ -270,12 +273,10 @@ export async function playQuery(client, interaction, query) {
         }
 
         return {
-            embed: successEmbed(
-                willPlayNow ? 'Now Playing' : 'Track Added',
-                willPlayNow
-                    ? `**${track.info.title}**\n${track.info.author}`
-                    : `**${track.info.title}**\n${track.info.author}\nPosition: #${queuePosition} in queue`,
-            ),
+            embed: buildAddedTrackEmbed(track, {
+                position: queuePosition,
+                playNow: willPlayNow,
+            }),
         };
     }
 
