@@ -11,21 +11,44 @@ export const botConfig = {
   // - "invisible" = appears offline
   presence: {
     // Current online state shown on Discord.
+    // "online" | "idle" | "dnd" | "invisible"
     status: "online",
 
-    // Activity lines shown under the bot name.
+    // Rich activity shown under the bot name.
     // `type` number mapping from Discord:
     // 0 = Playing
     // 1 = Streaming
     // 2 = Listening
     // 3 = Watching
-    // 4 = Custom
+    // 4 = Custom      (renders only `state`, single line)
     // 5 = Competing
+    //
+    // NOTE: `details` + `state` (the two extra lines) only render for
+    // non-custom types (0/1/2/3/5). `buttons` is NOT supported on bot
+    // presences (RPC only).
     activities: [
       {
-        name: "Custom Status", // required by Discord API, not shown in the client
-        state: "/play",     // this is what people actually see
-        type: 4,               // Custom
+        name: "TitanBot", // header line: "Playing TitanBot"
+        type: 0, // Playing
+        url: null, // required only when type = 1 (Streaming)
+
+        // Two lines under the header. Supports placeholders:
+        // {guilds} | {users} | {commands}  (resolved live on ready)
+        details: "/help • /play • /queue",
+        state: "{guilds} servers • {users} members",
+
+        // Elapsed timer. `start: true` = start counting when the bot goes
+        // ready. Set to false/null to hide the timer.
+        timestamps: { start: true },
+
+        // Images. Use a Rich Presence art-asset key (uploaded in the Discord
+        // Developer Portal) OR a direct https image URL. Set to null to hide.
+        assets: {
+          largeImage: null,
+          largeText: null,
+          smallImage: null,
+          smallText: null,
+        },
       },
     ],
   },
@@ -184,6 +207,60 @@ function normalizeCategoryKey(category) {
 
 export function getCommandPrefix() {
   return botConfig.commands?.prefix ?? "!";
+}
+
+// Builds the presence payload Discord actually receives. Resolves dynamic
+// placeholders ({guilds}/{users}/{commands}) and converts `timestamps.start
+// === true` into a real start time so the elapsed counter begins on ready.
+export function resolvePresence(client) {
+  const presence = botConfig.presence;
+
+  if (!presence?.activities?.length) {
+    return presence;
+  }
+
+  const guilds = client?.guilds?.cache;
+  const replacements = {
+    guilds: (guilds?.size ?? 0).toLocaleString("en-US"),
+    users: (
+      guilds?.reduce((total, guild) => total + (guild.memberCount ?? 0), 0) ?? 0
+    ).toLocaleString("en-US"),
+    commands: String(client?.commands?.size ?? 0),
+  };
+
+  const fill = (value) =>
+    typeof value === "string"
+      ? value.replace(/\{(\w+)\}/g, (match, key) =>
+          key in replacements ? replacements[key] : match,
+        )
+      : value;
+
+  const activities = presence.activities.map((activity) => {
+    const resolved = { ...activity };
+
+    if (resolved.details != null) resolved.details = fill(resolved.details);
+    if (resolved.state != null) resolved.state = fill(resolved.state);
+
+    if (resolved.timestamps) {
+      const { start, end } = resolved.timestamps;
+      const timestamps = {};
+      if (start === true) timestamps.start = Date.now();
+      else if (start) timestamps.start = start;
+      if (end === true) timestamps.end = Date.now();
+      else if (end) timestamps.end = end;
+
+      resolved.timestamps = Object.keys(timestamps).length ? timestamps : undefined;
+    }
+
+    if (resolved.assets) {
+      const { largeImage, smallImage } = resolved.assets;
+      if (!largeImage && !smallImage) resolved.assets = undefined;
+    }
+
+    return resolved;
+  });
+
+  return { status: presence.status, activities };
 }
 
 export function getBotOwners() {
