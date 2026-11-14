@@ -1,5 +1,9 @@
 import { logger } from '../utils/logger.js';
 
+// Captured once at process start; the elapsed-timer origin for the default
+// presence, so the counter doesn't reset every time presence is re-applied.
+const PRESENCE_STARTED_AT = Date.now();
+
 export const botConfig = {
   // =========================
   // BOT PRESENCE (what users see under the bot name)
@@ -51,6 +55,34 @@ export const botConfig = {
         },
       },
     ],
+
+    // Special presence shown while music is playing in ANY guild. Reverts to
+    // the `activities` above once nothing is playing.
+    music: {
+      enabled: true,
+
+      // "online" | "idle" | "dnd" | "invisible"
+      status: "online",
+
+      // 2 = Listening ("Listening to {name}"). 0 = Playing works too.
+      type: 2,
+
+      // Placeholders: {title} {author} {requester} {guild} {count} {artwork}
+      name: "{title}",
+      details: "{guild}",
+      state: "by {author} • {count} playing",
+
+      // Timer starts counting when the current track started.
+      timestamps: { start: true },
+
+      // {artwork} resolves to the track cover (empty -> image hidden).
+      assets: {
+        largeImage: "{artwork}",
+        largeText: "{title}",
+        smallImage: null,
+        smallText: null,
+      },
+    },
   },
 
   // =========================
@@ -209,9 +241,66 @@ export function getCommandPrefix() {
   return botConfig.commands?.prefix ?? "!";
 }
 
-// Builds the presence payload Discord actually receives. Resolves dynamic
-// placeholders ({guilds}/{users}/{commands}) and converts `timestamps.start
-// === true` into a real start time so the elapsed counter begins on ready.
+// Fills {placeholder} tokens in a string using the given replacements map.
+// Unknown tokens are left untouched.
+function fillPlaceholders(value, replacements) {
+  return typeof value === "string"
+    ? value.replace(/\{(\w+)\}/g, (match, key) =>
+        key in replacements ? replacements[key] : match,
+      )
+    : value;
+}
+
+// Turns a presence-activity template into the payload Discord receives,
+// resolving placeholders and building the timestamps/assets blocks.
+function buildActivity(template, replacements, { startTime } = {}) {
+  const activity = {
+    name: fillPlaceholders(template.name, replacements),
+    type: template.type ?? 0,
+  };
+
+  if (template.url) activity.url = template.url;
+  if (template.details != null) {
+    activity.details = fillPlaceholders(template.details, replacements);
+  }
+  if (template.state != null) {
+    activity.state = fillPlaceholders(template.state, replacements);
+  }
+
+  if (template.timestamps) {
+    const { start, end } = template.timestamps;
+    const timestamps = {};
+    if (start === true) timestamps.start = startTime ?? Date.now();
+    else if (start) timestamps.start = start;
+    if (end === true) timestamps.end = Date.now();
+    else if (end) timestamps.end = end;
+    if (Object.keys(timestamps).length) activity.timestamps = timestamps;
+  }
+
+  if (template.assets) {
+    const assets = {};
+    const largeImage = fillPlaceholders(template.assets.largeImage, replacements);
+    const smallImage = fillPlaceholders(template.assets.smallImage, replacements);
+    if (largeImage) {
+      assets.largeImage = largeImage;
+      if (template.assets.largeText) {
+        assets.largeText = fillPlaceholders(template.assets.largeText, replacements);
+      }
+    }
+    if (smallImage) {
+      assets.smallImage = smallImage;
+      if (template.assets.smallText) {
+        assets.smallText = fillPlaceholders(template.assets.smallText, replacements);
+      }
+    }
+    if (Object.keys(assets).length) activity.assets = assets;
+  }
+
+  return activity;
+}
+
+// Builds the default (non-music) presence Discord actually receives. Resolves
+// dynamic placeholders ({guilds}/{users}/{commands}) against the live client.
 export function resolvePresence(client) {
   const presence = botConfig.presence;
 
@@ -228,39 +317,38 @@ export function resolvePresence(client) {
     commands: String(client?.commands?.size ?? 0),
   };
 
-  const fill = (value) =>
-    typeof value === "string"
-      ? value.replace(/\{(\w+)\}/g, (match, key) =>
-          key in replacements ? replacements[key] : match,
-        )
-      : value;
-
-  const activities = presence.activities.map((activity) => {
-    const resolved = { ...activity };
-
-    if (resolved.details != null) resolved.details = fill(resolved.details);
-    if (resolved.state != null) resolved.state = fill(resolved.state);
-
-    if (resolved.timestamps) {
-      const { start, end } = resolved.timestamps;
-      const timestamps = {};
-      if (start === true) timestamps.start = Date.now();
-      else if (start) timestamps.start = start;
-      if (end === true) timestamps.end = Date.now();
-      else if (end) timestamps.end = end;
-
-      resolved.timestamps = Object.keys(timestamps).length ? timestamps : undefined;
-    }
-
-    if (resolved.assets) {
-      const { largeImage, smallImage } = resolved.assets;
-      if (!largeImage && !smallImage) resolved.assets = undefined;
-    }
-
-    return resolved;
-  });
+  const activities = presence.activities.map((activity) =>
+    buildActivity(activity, replacements, { startTime: PRESENCE_STARTED_AT }),
+  );
 
   return { status: presence.status, activities };
+}
+
+// Builds the "music is playing" presence from `presence.music`. `track` is the
+// entry tracked by services/music/musicPresence.js; `activeCount` is how many
+// guilds are currently playing.
+export function resolveMusicPresence(client, track, activeCount = 1) {
+  const music = botConfig.presence?.music;
+
+  if (!music?.enabled) {
+    return resolvePresence(client);
+  }
+
+  const replacements = {
+    title: track?.title ?? "Unknown",
+    author: track?.author ?? "Unknown",
+    requester: track?.requester ?? "Unknown",
+    guild: track?.guildName ?? "Unknown",
+    count: String(activeCount ?? 1),
+    artwork: track?.artwork ?? "",
+  };
+
+  return {
+    status: music.status ?? "online",
+    activities: [
+      buildActivity(music, replacements, { startTime: track?.startedAt }),
+    ],
+  };
 }
 
 export function getBotOwners() {

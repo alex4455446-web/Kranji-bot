@@ -13,6 +13,7 @@ import {
     getQueuePageSize,
 } from './musicEmbeds.js';
 import { refreshPlayerMessage } from './playerHandler.js';
+import { unregisterNowPlaying } from './musicPresence.js';
 
 const YOUTUBE_URL_PATTERN = /(?:youtube\.com|youtu\.be)/i;
 const PLAYER_CONNECT_TIMEOUT_MS = 12_000;
@@ -550,6 +551,7 @@ export function buildQueueReply(client, guildId, page = 0) {
 
 export async function destroyPlayerSession(client, guildId, player, guildData, { forceDisconnect = false } = {}) {
     clearUpdateInterval(guildData);
+    unregisterNowPlaying(client, guildId);
     if (guildData.idleTimeout) {
         clearTimeout(guildData.idleTimeout);
         guildData.idleTimeout = null;
