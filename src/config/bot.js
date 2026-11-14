@@ -48,8 +48,9 @@ export const botConfig = {
         // Images. Use a Rich Presence art-asset key (uploaded in the Discord
         // Developer Portal) OR a direct https image URL. Set to null to hide.
         assets: {
-          largeImage: null,
-          largeText: null,
+          largeImage:
+            "https://i.supaimg.com/e6a0e633-3e0b-472f-bba3-c79e34b9385b/3515d830-3a29-42a2-a11b-3402185666ad.png",
+          largeText: "TitanBot",
           smallImage: null,
           smallText: null,
         },
@@ -75,12 +76,14 @@ export const botConfig = {
       // Timer starts counting when the current track started.
       timestamps: { start: true },
 
-      // {artwork} resolves to the track cover (empty -> image hidden).
+      // Large image = bot logo, small (mini) image = track cover.
+      // {artwork} resolves to the track thumbnail (empty -> image hidden).
       assets: {
-        largeImage: "{artwork}",
-        largeText: "{title}",
-        smallImage: null,
-        smallText: null,
+        largeImage:
+          "https://i.supaimg.com/e6a0e633-3e0b-472f-bba3-c79e34b9385b/3515d830-3a29-42a2-a11b-3402185666ad.png",
+        largeText: "TitanBot",
+        smallImage: "{artwork}",
+        smallText: "{title}",
       },
     },
   },
