@@ -1,5 +1,9 @@
 import { logger } from '../utils/logger.js';
 
+// Captured once at process start; the elapsed-timer origin for the default
+// presence, so the counter doesn't reset every time presence is re-applied.
+const PRESENCE_STARTED_AT = Date.now();
+
 export const botConfig = {
   // =========================
   // BOT PRESENCE (what users see under the bot name)
@@ -11,23 +15,77 @@ export const botConfig = {
   // - "invisible" = appears offline
   presence: {
     // Current online state shown on Discord.
+    // "online" | "idle" | "dnd" | "invisible"
     status: "online",
 
-    // Activity lines shown under the bot name.
+    // Rich activity shown under the bot name.
     // `type` number mapping from Discord:
     // 0 = Playing
     // 1 = Streaming
     // 2 = Listening
     // 3 = Watching
-    // 4 = Custom
+    // 4 = Custom      (renders only `state`, single line)
     // 5 = Competing
+    //
+    // NOTE: `details` + `state` (the two extra lines) only render for
+    // non-custom types (0/1/2/3/5). `buttons` is NOT supported on bot
+    // presences (RPC only).
     activities: [
       {
-        name: "Custom Status", // required by Discord API, not shown in the client
-        state: "/play",     // this is what people actually see
-        type: 4,               // Custom
+        name: "TitanBot", // header line: "Playing TitanBot"
+        type: 0, // Playing
+        url: null, // required only when type = 1 (Streaming)
+
+        // Two lines under the header. Supports placeholders:
+        // {guilds} | {users} | {commands}  (resolved live on ready)
+        details: "/help • /play • /queue",
+        state: "{guilds} servers • {users} members",
+
+        // Elapsed timer. `start: true` = start counting when the bot goes
+        // ready. Set to false/null to hide the timer.
+        timestamps: { start: true },
+
+        // Images. Use a Rich Presence art-asset key (uploaded in the Discord
+        // Developer Portal) OR a direct https image URL. Set to null to hide.
+        assets: {
+          largeImage:
+            "https://i.supaimg.com/e6a0e633-3e0b-472f-bba3-c79e34b9385b/3515d830-3a29-42a2-a11b-3402185666ad.png",
+          largeText: "TitanBot",
+          smallImage: null,
+          smallText: null,
+        },
       },
     ],
+
+    // Special presence shown while music is playing in ANY guild. Reverts to
+    // the `activities` above once nothing is playing.
+    music: {
+      enabled: true,
+
+      // "online" | "idle" | "dnd" | "invisible"
+      status: "online",
+
+      // 2 = Listening ("Listening to {name}"). 0 = Playing works too.
+      type: 2,
+
+      // Placeholders: {title} {author} {requester} {guild} {count} {artwork}
+      name: "{title}",
+      details: "{guild}",
+      state: "by {author} • {count} playing",
+
+      // Timer starts counting when the current track started.
+      timestamps: { start: true },
+
+      // Large image = bot logo, small (mini) image = track cover.
+      // {artwork} resolves to the track thumbnail (empty -> image hidden).
+      assets: {
+        largeImage:
+          "https://i.supaimg.com/e6a0e633-3e0b-472f-bba3-c79e34b9385b/3515d830-3a29-42a2-a11b-3402185666ad.png",
+        largeText: "TitanBot",
+        smallImage: "{artwork}",
+        smallText: "{title}",
+      },
+    },
   },
 
   // =========================
@@ -184,6 +242,116 @@ function normalizeCategoryKey(category) {
 
 export function getCommandPrefix() {
   return botConfig.commands?.prefix ?? "!";
+}
+
+// Fills {placeholder} tokens in a string using the given replacements map.
+// Unknown tokens are left untouched.
+function fillPlaceholders(value, replacements) {
+  return typeof value === "string"
+    ? value.replace(/\{(\w+)\}/g, (match, key) =>
+        key in replacements ? replacements[key] : match,
+      )
+    : value;
+}
+
+// Turns a presence-activity template into the payload Discord receives,
+// resolving placeholders and building the timestamps/assets blocks.
+function buildActivity(template, replacements, { startTime } = {}) {
+  const activity = {
+    name: fillPlaceholders(template.name, replacements),
+    type: template.type ?? 0,
+  };
+
+  if (template.url) activity.url = template.url;
+  if (template.details != null) {
+    activity.details = fillPlaceholders(template.details, replacements);
+  }
+  if (template.state != null) {
+    activity.state = fillPlaceholders(template.state, replacements);
+  }
+
+  if (template.timestamps) {
+    const { start, end } = template.timestamps;
+    const timestamps = {};
+    if (start === true) timestamps.start = startTime ?? Date.now();
+    else if (start) timestamps.start = start;
+    if (end === true) timestamps.end = Date.now();
+    else if (end) timestamps.end = end;
+    if (Object.keys(timestamps).length) activity.timestamps = timestamps;
+  }
+
+  if (template.assets) {
+    const assets = {};
+    const largeImage = fillPlaceholders(template.assets.largeImage, replacements);
+    const smallImage = fillPlaceholders(template.assets.smallImage, replacements);
+    if (largeImage) {
+      assets.largeImage = largeImage;
+      if (template.assets.largeText) {
+        assets.largeText = fillPlaceholders(template.assets.largeText, replacements);
+      }
+    }
+    if (smallImage) {
+      assets.smallImage = smallImage;
+      if (template.assets.smallText) {
+        assets.smallText = fillPlaceholders(template.assets.smallText, replacements);
+      }
+    }
+    if (Object.keys(assets).length) activity.assets = assets;
+  }
+
+  return activity;
+}
+
+// Builds the default (non-music) presence Discord actually receives. Resolves
+// dynamic placeholders ({guilds}/{users}/{commands}) against the live client.
+export function resolvePresence(client) {
+  const presence = botConfig.presence;
+
+  if (!presence?.activities?.length) {
+    return presence;
+  }
+
+  const guilds = client?.guilds?.cache;
+  const replacements = {
+    guilds: (guilds?.size ?? 0).toLocaleString("en-US"),
+    users: (
+      guilds?.reduce((total, guild) => total + (guild.memberCount ?? 0), 0) ?? 0
+    ).toLocaleString("en-US"),
+    commands: String(client?.commands?.size ?? 0),
+  };
+
+  const activities = presence.activities.map((activity) =>
+    buildActivity(activity, replacements, { startTime: PRESENCE_STARTED_AT }),
+  );
+
+  return { status: presence.status, activities };
+}
+
+// Builds the "music is playing" presence from `presence.music`. `track` is the
+// entry tracked by services/music/musicPresence.js; `activeCount` is how many
+// guilds are currently playing.
+export function resolveMusicPresence(client, track, activeCount = 1) {
+  const music = botConfig.presence?.music;
+
+  if (!music?.enabled) {
+    return resolvePresence(client);
+  }
+
+  const replacements = {
+    title: track?.title ?? "Unknown",
+    author: track?.author ?? "Unknown",
+    requester: track?.requester ?? "Unknown",
+    guild: track?.guildName ?? "Unknown",
+    count: String(activeCount ?? 1),
+    artwork: track?.artwork ?? "",
+  };
+
+  return {
+    status: music.status ?? "online",
+    activities: [
+      buildActivity(music, replacements, { startTime: track?.startedAt }),
+    ],
+  };
 }
 
 export function getBotOwners() {

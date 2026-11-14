@@ -7,12 +7,15 @@ import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
 import { getGuildMusicData, clearUpdateInterval } from './playerStore.js';
 import { canControlMusic, requireVoiceChannel, VOICE_CHANNEL_DENIAL } from './permissions.js';
 import {
+    buildAddedTrackEmbed,
     buildNowPlayingEmbed,
+    buildPlaylistAddedEmbed,
     buildQueueEmbed,
     buildQueuePaginationRow,
     getQueuePageSize,
 } from './musicEmbeds.js';
 import { refreshPlayerMessage } from './playerHandler.js';
+import { unregisterNowPlaying } from './musicPresence.js';
 
 const YOUTUBE_URL_PATTERN = /(?:youtube\.com|youtu\.be)/i;
 const PLAYER_CONNECT_TIMEOUT_MS = 12_000;
@@ -232,10 +235,11 @@ export async function playQuery(client, interaction, query) {
         }
 
         return {
-            embed: successEmbed(
-                'Playlist Added',
-                `**${playlistInfo?.name || 'Playlist'}**\nAdded ${added} of ${tracks.length} track(s).${skipped ? ` Skipped ${skipped} duplicate(s).` : ''}`,
-            ),
+            embed: buildPlaylistAddedEmbed(playlistInfo, {
+                added,
+                total: tracks.length,
+                skipped,
+            }),
         };
     }
 
@@ -269,12 +273,10 @@ export async function playQuery(client, interaction, query) {
         }
 
         return {
-            embed: successEmbed(
-                willPlayNow ? 'Now Playing' : 'Track Added',
-                willPlayNow
-                    ? `**${track.info.title}**\n${track.info.author}`
-                    : `**${track.info.title}**\n${track.info.author}\nPosition: #${queuePosition} in queue`,
-            ),
+            embed: buildAddedTrackEmbed(track, {
+                position: queuePosition,
+                playNow: willPlayNow,
+            }),
         };
     }
 
@@ -550,6 +552,7 @@ export function buildQueueReply(client, guildId, page = 0) {
 
 export async function destroyPlayerSession(client, guildId, player, guildData, { forceDisconnect = false } = {}) {
     clearUpdateInterval(guildData);
+    unregisterNowPlaying(client, guildId);
     if (guildData.idleTimeout) {
         clearTimeout(guildData.idleTimeout);
         guildData.idleTimeout = null;

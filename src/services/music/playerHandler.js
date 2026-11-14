@@ -2,6 +2,7 @@
 
 import { logger } from '../../utils/logger.js';
 import { getGuildMusicData, clearUpdateInterval } from './playerStore.js';
+import { registerNowPlaying, unregisterNowPlaying } from './musicPresence.js';
 import {
     buildNowPlayingEmbed,
     buildPlayerButtonRows,
@@ -122,6 +123,8 @@ export function setupPlayerHandler(client) {
 
     client.riffy.on('trackStart', async (player, track) => {
         try {
+            registerNowPlaying(client, player, track);
+
             const guildData = getGuildMusicData(player.guildId);
 
             // Keep the Lavalink player's loop mode aligned with the stored preference.
@@ -162,6 +165,8 @@ export function setupPlayerHandler(client) {
                 return;
             }
 
+            unregisterNowPlaying(client, player.guildId);
+
             if (guildData.playerMessageId && guildData.playerChannelId) {
                 try {
                     const channel = client.channels.cache.get(guildData.playerChannelId);
@@ -200,6 +205,7 @@ export function setupPlayerHandler(client) {
     client.riffy.on('playerDisconnect', async (player) => {
         const guildData = getGuildMusicData(player.guildId);
         clearUpdateInterval(guildData);
+        unregisterNowPlaying(client, player.guildId);
 
         if (guildData.playerMessageId && guildData.playerChannelId) {
             try {
